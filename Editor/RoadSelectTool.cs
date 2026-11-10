@@ -912,7 +912,7 @@ file class RoadSelectToolWidget : ToolSidebarWidget
 		else if (network.IsValid() && m_Tool.SelectedSegments.ToList() is { Count: > 0 } segments)
 			BuildSegmentSection(network, segments);
 		else
-			AddGroup("Selection").Add(new Label("Click a node or a road to select it. Shift+click adds more."));
+			AddGroup("Selection").Add(new WrappedLabel("Click a node or a road to select it. Shift+click adds more."));
 
 		AddShortcuts(
 			("Select", "LMB or SHIFT + LMB"),

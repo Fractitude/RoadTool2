@@ -543,7 +543,7 @@ file class RoadLotToolWidget : ToolSidebarWidget
 		}
 		else
 		{
-			AddGroup("Lot").Add(new Label("Click the loose end of a road and drag to lay a parking lot there, or click a lot to edit it.") { WordWrap = true });
+			AddGroup("Lot").Add(new WrappedLabel("Click the loose end of a road and drag to lay a parking lot there, or click a lot to edit it."));
 		}
 
 		AddShortcuts(

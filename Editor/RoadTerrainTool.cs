@@ -1672,9 +1672,9 @@ file class RoadTerrainToolWidget : ToolSidebarWidget
 {
 	private readonly RoadTerrainTool m_Tool;
 	private RoadNetwork m_Network;
-	private Label m_LayerStatus;
+	private WrappedLabel m_LayerStatus;
 	private Checkbox m_Live;
-	private Label m_Result;
+	private WrappedLabel m_Result;
 	private int m_ShownVersion = -1;
 	private IDisposable m_UndoScope;
 
@@ -1702,8 +1702,8 @@ file class RoadTerrainToolWidget : ToolSidebarWidget
 
 		var layer = AddGroup("Road Layer");
 
-		layer.Add(new Label("Remembers the ground under everything the roads shape and paint, so both can be done again whenever the roads change, and taken back out. Start it once, on the terrain before any road is shaped into it.") { WordWrap = true });
-		m_LayerStatus = layer.Add(new Label("") { WordWrap = true });
+		layer.Add(new WrappedLabel("Remembers the ground under everything the roads shape and paint, so both can be done again whenever the roads change, and taken back out. Start it once, on the terrain before any road is shaped into it."));
+		m_LayerStatus = layer.Add(new WrappedLabel(""));
 
 		m_Live = layer.Add(new Checkbox("Live Update")
 		{
@@ -1727,7 +1727,7 @@ file class RoadTerrainToolWidget : ToolSidebarWidget
 
 			SidebarRows.Add(shaping, serialized.GetProperty(nameof(RoadNetwork.TerrainFalloff)));
 			SidebarRows.Add(shaping, serialized.GetProperty(nameof(RoadNetwork.TerrainSink)));
-			shaping.Add(new Label("The ground is cut and filled to meet every road and its border, then blends back over the falloff. Roads themselves do not move. Press it again whenever the roads change: it always starts from the road layer's ground.") { WordWrap = true });
+			shaping.Add(new WrappedLabel("The ground is cut and filled to meet every road and its border, then blends back over the falloff. Roads themselves do not move. Press it again whenever the roads change: it always starts from the road layer's ground."));
 			shaping.Add(new Button("Conform Terrain To Roads", "landscape") { Clicked = m_Tool.ConformTerrain });
 
 			var painting = AddGroup("Painting");
@@ -1735,22 +1735,22 @@ file class RoadTerrainToolWidget : ToolSidebarWidget
 			SidebarRows.Add(painting, serialized.GetProperty(nameof(RoadNetwork.TerrainPaintMaterial)));
 			SidebarRows.Add(painting, serialized.GetProperty(nameof(RoadNetwork.TerrainPaintMargin)));
 			SidebarRows.Add(painting, serialized.GetProperty(nameof(RoadNetwork.TerrainPaintFade)));
-			painting.Add(new Label("Paints the material onto the terrain under every road and its border, out by the margin and fading from there. Give a country verge the same texture and the two merge.") { WordWrap = true });
+			painting.Add(new WrappedLabel("Paints the material onto the terrain under every road and its border, out by the margin and fading from there. Give a country verge the same texture and the two merge."));
 			painting.Add(new Button("Paint Terrain Along Roads", "brush") { Clicked = m_Tool.PaintTerrain });
 		}
 		else
 		{
-			AddGroup("Shaping").Add(new Label("No road network in the scene yet: draw a road first.") { WordWrap = true });
+			AddGroup("Shaping").Add(new WrappedLabel("No road network in the scene yet: draw a road first."));
 		}
 
 		var nodes = AddGroup("Nodes");
 
-		nodes.Add(new Label("Drops every node onto the ground under it; the roads stay smooth between nodes.") { WordWrap = true });
+		nodes.Add(new WrappedLabel("Drops every node onto the ground under it; the roads stay smooth between nodes."));
 		nodes.Add(new Button("Snap Nodes To Ground", "vertical_align_bottom") { Clicked = m_Tool.SnapNodesToGround });
 
 		var result = AddGroup("Result");
 
-		m_Result = result.Add(new Label("") { WordWrap = true });
+		m_Result = result.Add(new WrappedLabel(""));
 
 		Layout.AddStretchCell();
 	}

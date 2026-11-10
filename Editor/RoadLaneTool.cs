@@ -324,7 +324,7 @@ file class RoadLaneToolWidget : ToolSidebarWidget
 				: segment.ForwardLanes <= 0 ? "one-way, end to start"
 				: $"two-way, {segment.ForwardLanes} forward / {segment.BackwardLanes} back";
 
-			group.Add(new Label($"{segment.LaneCount} lane{(segment.LaneCount == 1 ? "" : "s")}, {direction}") { WordWrap = true });
+			group.Add(new WrappedLabel($"{segment.LaneCount} lane{(segment.LaneCount == 1 ? "" : "s")}, {direction}"));
 
 			var crossings = AddGroup("Crossings");
 			var profile = network.ProfileOf(segment);
@@ -333,16 +333,16 @@ file class RoadLaneToolWidget : ToolSidebarWidget
 			{
 				SidebarRows.Add(crossings, serialized.GetProperty(nameof(RoadSegment.CrossingAtStart)));
 				SidebarRows.Add(crossings, serialized.GetProperty(nameof(RoadSegment.CrossingAtEnd)));
-				crossings.Add(new Label("Drawn where the end meets a junction.") { WordWrap = true });
+				crossings.Add(new WrappedLabel("Drawn where the end meets a junction."));
 			}
 			else
 			{
-				crossings.Add(new Label($"The road type \"{profile.ResourceName}\" has no crossings; turn them on in the profile.") { WordWrap = true });
+				crossings.Add(new WrappedLabel($"The road type \"{profile.ResourceName}\" has no crossings; turn them on in the profile."));
 			}
 		}
 		else
 		{
-			AddGroup("Lanes").Add(new Label("Hover a road to see its lanes; click it to add one, right-click to change direction.") { WordWrap = true });
+			AddGroup("Lanes").Add(new WrappedLabel("Hover a road to see its lanes; click it to add one, right-click to change direction."));
 		}
 
 		AddShortcuts(
