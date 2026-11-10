@@ -207,6 +207,9 @@ public class RoadSelectTool : EditorTool
 	private Vector3 m_MoveDelta;
 	private IDisposable m_UndoScope;
 
+	// Where each node of a group move was, in world space, when the drag began.
+	private readonly Dictionary<int, Vector3> m_GroupStart = new();
+
 	// Shift+click then drag with the button held: what was under the first click (a node or a road, added or taken out)
 	// is done to everything of that kind the cursor passes over.
 	private bool m_Painting;
@@ -310,6 +313,8 @@ public class RoadSelectTool : EditorTool
 
 		if (SelectedNode is { } node)
 			UpdateNodeGizmo(network, node);
+		else if (m_SegmentIds.Count > 0 || m_NodeIds.Count > 1)
+			UpdateGroupGizmo(network);
 	}
 
 
@@ -784,6 +789,81 @@ public class RoadSelectTool : EditorTool
 
 
 	/// <summary>
+	/// The nodes a group move carries: the ends of every selected road, or the selected nodes.
+	/// </summary>
+	private List<RoadNode> GroupNodes(RoadNetwork _Network)
+	{
+		if (m_SegmentIds.Count == 0)
+			return SelectedNodes.ToList();
+
+		var ids = new HashSet<int>();
+
+		foreach (var segment in SelectedSegments)
+		{
+			ids.Add(segment.StartNodeId);
+			ids.Add(segment.EndNodeId);
+		}
+
+		return ids.Select(_Network.FindNode).Where(node => node is not null).ToList();
+	}
+
+
+
+	/// <summary>
+	/// The move gizmo over several selected roads (or nodes), at the middle of their nodes. Every node is moved by
+	/// the same amount, so the selection keeps its shape; roads that are not selected but share a node stretch to
+	/// follow. The grid snaps the amount moved, in world axes.
+	/// </summary>
+	private void UpdateGroupGizmo(RoadNetwork _Network)
+	{
+		var nodes = GroupNodes(_Network);
+
+		if (nodes.Count == 0)
+			return;
+
+		var transform = _Network.WorldTransform;
+		Vector3 pivot = Vector3.Zero;
+
+		foreach (var groupNode in nodes)
+			pivot += transform.PointToWorld(groupNode.Position);
+
+		pivot /= nodes.Count;
+
+		using (Gizmo.Scope("roadtool2_group_gizmo", new Transform(pivot)))
+		{
+			Gizmo.Hitbox.DepthBias = 0.01f;
+
+			if (Gizmo.Control.Position("position", Vector3.Zero, out Vector3 delta, Rotation.Identity))
+			{
+				if (m_Drag != DragKind.Gizmo)
+				{
+					m_Drag = DragKind.Gizmo;
+					m_DragStartWorld = pivot;
+					m_MoveDelta = Vector3.Zero;
+					m_GroupStart.Clear();
+
+					foreach (var groupNode in nodes)
+						m_GroupStart[groupNode.Id] = transform.PointToWorld(groupNode.Position);
+
+					string name = m_SegmentIds.Count > 0 ? (m_SegmentIds.Count > 1 ? "Move Roads" : "Move Road") : "Move Nodes";
+					m_UndoScope ??= SceneEditorSession.Active.UndoScope(name).WithComponentChanges(_Network).Push();
+				}
+
+				m_MoveDelta += delta;
+				Vector3 offset = Gizmo.Snap(m_DragStartWorld, m_MoveDelta, Rotation.Identity) - m_DragStartWorld;
+
+				foreach (var (id, start) in m_GroupStart)
+					_Network.MoveNode(id, transform.PointToLocal(start + offset));
+			}
+		}
+
+		if (m_Drag == DragKind.Gizmo && !Gizmo.IsLeftMouseDown)
+			EndDrag();
+	}
+
+
+
+	/// <summary>
 	/// Puts a dragged node under the snaps that are on.
 	/// <para>
 	/// Grid Snap rounds the cursor to the grid. Angle Snap puts the node where the road from each of its neighbours
@@ -1079,6 +1159,7 @@ public class RoadSelectTool : EditorTool
 		m_SnapNodeId = -1;
 		m_Drag = DragKind.None;
 		m_DragSegmentId = -1;
+		m_GroupStart.Clear();
 		m_UndoScope?.Dispose();
 		m_UndoScope = null;
 	}
@@ -1382,6 +1463,7 @@ file class RoadSelectToolWidget : ToolSidebarWidget
 			("Select", "LMB or SHIFT + LMB"),
 			("Select Connected Roads", "Double LMB or SHIFT + Double LMB"),
 			("Drag Node / Tangent", "LMB Drag"),
+			("Move Selected Roads", "Gizmo"),
 			("Flip Snapping (Angle, Grid, Nodes)", "Hold SHIFT"),
 			("Straight Tangent (no mirror)", "ALT + Drag"),
 			("Insert Node On Road", "CTRL + LMB"),
