@@ -56,7 +56,7 @@ public class RoadDrawTool : EditorTool
 	/// measured from, read like a protractor laid on the node: 90° square to that road, 180° straight on. Either
 	/// way the number is exact: the road is built at precisely that angle, not at something it rounds to.
 	/// </summary>
-	private readonly struct SnapGuide
+	internal readonly struct SnapGuide
 	{
 		public readonly Vector3 Start;
 
@@ -323,7 +323,7 @@ public class RoadDrawTool : EditorTool
 
 		Vector2 snapped = start + direction * length;
 
-		_SnappedWorld = new Vector3(snapped.x, snapped.y, GroundHeightAt(snapped, _CursorWorld.z));
+		_SnappedWorld = new Vector3(snapped.x, snapped.y, GroundHeightAt(Scene, snapped, _CursorWorld.z));
 
 		return true;
 	}
@@ -474,7 +474,7 @@ public class RoadDrawTool : EditorTool
 	/// axes in World space, and along the roads leaving that node (the end lands on that road's line). Grids come
 	/// out exact.
 	/// </summary>
-	private bool TryAlign(RoadNetwork _Network, RoadNode _Last, Vector2 _Start, Vector2 _Direction, float _Length, float _Tolerance, out float _AlignedLength, out Vector3 _AnchorWorld)
+	internal static bool TryAlign(RoadNetwork _Network, RoadNode _Last, Vector2 _Start, Vector2 _Direction, float _Length, float _Tolerance, out float _AlignedLength, out Vector3 _AnchorWorld)
 	{
 		var transform = _Network.WorldTransform;
 		var perpendicular = new Vector2(-_Direction.y, _Direction.x);
@@ -543,13 +543,13 @@ public class RoadDrawTool : EditorTool
 	/// <summary>
 	/// Which way each road leaves a node, flat and in world space.
 	/// </summary>
-	private static IEnumerable<Vector2> RoadDirections(RoadNetwork _Network, RoadNode _Node)
+	internal static IEnumerable<Vector2> RoadDirections(RoadNetwork _Network, RoadNode _Node, int _ExcludeSegmentId = -1)
 	{
 		var transform = _Network.WorldTransform;
 
 		foreach (var segment in _Network.GetSegmentsAt(_Node.Id))
 		{
-			if (!_Network.TryGetCurve(segment, out var curve))
+			if (segment.Id == _ExcludeSegmentId || !_Network.TryGetCurve(segment, out var curve))
 				continue;
 
 			Vector3 tangent = segment.StartNodeId == _Node.Id ? curve.Tangent(0.0f) : -curve.Tangent(1.0f);
@@ -567,14 +567,14 @@ public class RoadDrawTool : EditorTool
 	/// How close (in the world, at the cursor) the road's end has to be to a guide crossing to take it: a constant
 	/// on-screen distance, like the node handles.
 	/// </summary>
-	private static float AlignTolerance(Vector3 _World)
+	internal static float AlignTolerance(Vector3 _World)
 	{
 		return MathF.Max(25.0f, Gizmo.Camera.Position.Distance(_World) * 0.025f);
 	}
 
 
 
-	private static float Cross(Vector2 _A, Vector2 _B)
+	internal static float Cross(Vector2 _A, Vector2 _B)
 	{
 		return _A.x * _B.y - _A.y * _B.x;
 	}
@@ -584,7 +584,7 @@ public class RoadDrawTool : EditorTool
 	/// <summary>
 	/// The multiple of the step, counted from the reference angle, nearest to the angle.
 	/// </summary>
-	private static float SnapTo(float _Angle, float _Reference, float _Step)
+	internal static float SnapTo(float _Angle, float _Reference, float _Step)
 	{
 		return _Reference + MathF.Round(AngleDifference(_Angle, _Reference) / _Step) * _Step;
 	}
@@ -597,7 +597,7 @@ public class RoadDrawTool : EditorTool
 	/// road it was measured from; when two roads give the same direction, against the one it makes the smaller
 	/// angle with.
 	/// </summary>
-	private static SnapGuide SnapToRoads(Vector3 _Start, float _Angle, IReadOnlyList<float> _Headings, float _Step)
+	internal static SnapGuide SnapToRoads(Vector3 _Start, float _Angle, IReadOnlyList<float> _Headings, float _Step)
 	{
 		float best = 0.0f;
 		float bestError = float.MaxValue;
@@ -627,7 +627,7 @@ public class RoadDrawTool : EditorTool
 	/// <summary>
 	/// The signed shortest turn from one angle to the other, in (-180, 180].
 	/// </summary>
-	private static float AngleDifference(float _To, float _From)
+	internal static float AngleDifference(float _To, float _From)
 	{
 		float difference = (_To - _From) % 360.0f;
 
@@ -641,7 +641,7 @@ public class RoadDrawTool : EditorTool
 
 
 
-	private static float NormalizeAngle(float _Angle)
+	internal static float NormalizeAngle(float _Angle)
 	{
 		float normalized = _Angle % 360.0f;
 
@@ -653,7 +653,7 @@ public class RoadDrawTool : EditorTool
 	/// <summary>
 	/// The flat unit direction of a heading, in degrees round from the world X axis.
 	/// </summary>
-	private static Vector3 HeadingDirection(float _Heading)
+	internal static Vector3 HeadingDirection(float _Heading)
 	{
 		float radians = _Heading.DegreeToRadian();
 
@@ -666,19 +666,19 @@ public class RoadDrawTool : EditorTool
 	/// The ground height at a point in plan, from a trace straight down through it (roads skipped, like the cursor
 	/// trace); the fallback height when there is nothing there.
 	/// </summary>
-	private float GroundHeightAt(Vector2 _Point, float _Fallback)
+	internal static float GroundHeightAt(Scene _Scene, Vector2 _Point, float _Fallback)
 	{
 		const float reach = 20000.0f;
 
 		var top = new Vector3(_Point.x, _Point.y, _Fallback + reach * 0.5f);
 		var ray = new Ray(top, Vector3.Down);
 
-		var physics = Scene.Trace.Ray(ray, reach).WithoutTags(RoadNetwork.ChunkTag).Run();
+		var physics = _Scene.Trace.Ray(ray, reach).WithoutTags(RoadNetwork.ChunkTag).Run();
 
 		if (physics.Hit)
 			return RoadTerrainLayers.OntoGround(physics, ray).z;
 
-		var meshes = Scene.Trace.Ray(ray, reach).UseRenderMeshes(true, EditorPreferences.BackfaceSelection).WithoutTags("hidden").WithoutTags(RoadNetwork.ChunkTag).UsePhysicsWorld(false).Run();
+		var meshes = _Scene.Trace.Ray(ray, reach).UseRenderMeshes(true, EditorPreferences.BackfaceSelection).WithoutTags("hidden").WithoutTags(RoadNetwork.ChunkTag).UsePhysicsWorld(false).Run();
 
 		return meshes.Hit ? meshes.EndPosition.z : _Fallback;
 	}
@@ -1017,6 +1017,9 @@ public class RoadDrawTool : EditorTool
 				Gizmo.Draw.ScreenText($"{snap.Shown:0.##}°", _Target.World, new Vector2(12.0f, -12.0f), size: 12.0f);
 			}
 
+			if (SnapActive && _Network.FindNode(m_LastNodeId) is { } last)
+				DrawDistance(transform.PointToWorld(last.Position), _Target.World);
+
 			if (m_AlignAnchor is { } anchor)
 			{
 				// The node the end is lined up with, and the line between them.
@@ -1030,7 +1033,55 @@ public class RoadDrawTool : EditorTool
 
 
 
-	private static void DrawDashed(Vector3 _From, Vector3 _To)
+	/// <summary>
+	/// A line between two nodes with its length written beside the middle of it, on the side that is up on screen.
+	/// Screen text cannot be turned, so it stays level and is only pushed away from the line.
+	/// </summary>
+	internal static void DrawDistance(Vector3 _From, Vector3 _To, int _Key = 0)
+	{
+		float length = Vector3.DistanceBetween(_From, _To);
+
+		if (length < 0.01f)
+			return;
+
+		Gizmo.Draw.LineThickness = 1.5f;
+		Gizmo.Draw.Color = Color.Yellow.WithAlpha(0.8f);
+		Gizmo.Draw.Line(_From, _To);
+
+		// A text drawn on the screen is one object per gizmo scope, so each label needs a scope of its own or the
+		// next one replaces it.
+		using var scope = Gizmo.Scope($"roadtool2_length_{_Key}");
+
+		// The line as it lies on screen (y down).
+		var from = Gizmo.Camera.ToScreen(_From);
+		var to = Gizmo.Camera.ToScreen(_To);
+		var onScreen = new Vector2(to.x - from.x, to.y - from.y);
+
+		if (onScreen.Length < 0.001f)
+			onScreen = new Vector2(1.0f, 0.0f);
+
+		float angle = MathF.Atan2(onScreen.y, onScreen.x).RadianToDegree();
+
+		// Never upside down: turn it half a turn when the line runs leftwards.
+		if (angle > 90.0f)
+			angle -= 180.0f;
+		else if (angle <= -90.0f)
+			angle += 180.0f;
+
+		// Square to the text's own direction, the way that points up the screen.
+		float radians = angle.DegreeToRadian();
+		var normal = new Vector2(MathF.Sin(radians), -MathF.Cos(radians));
+
+		var middle = new Vector2((from.x + to.x) * 0.5f, (from.y + to.y) * 0.5f) + normal * 12.0f;
+		const float width = 120.0f;
+		const float height = 20.0f;
+
+		Gizmo.Draw.ScreenText(new TextRendering.Scope($"{length:0}", Color.Yellow, 12.0f), new Rect(middle.x, middle.y, width, height), angle, TextFlag.Center);
+	}
+
+
+
+	internal static void DrawDashed(Vector3 _From, Vector3 _To)
 	{
 		float length = Vector3.DistanceBetween(_From, _To);
 
@@ -1053,7 +1104,7 @@ public class RoadDrawTool : EditorTool
 	/// <summary>
 	/// A flat arc round a point, from one heading to another the short way round.
 	/// </summary>
-	private static void DrawArc(Vector3 _Centre, float _Radius, float _From, float _To)
+	internal static void DrawArc(Vector3 _Centre, float _Radius, float _From, float _To)
 	{
 		float sweep = AngleDifference(_To, _From);
 		int steps = Math.Max(2, (int)MathF.Ceiling(MathF.Abs(sweep) / 5.0f));
