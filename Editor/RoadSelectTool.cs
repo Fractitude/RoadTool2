@@ -213,6 +213,22 @@ public class RoadSelectTool : EditorTool
 	private bool m_PaintNodes;
 	private bool m_PaintAdd;
 
+	/// <summary>
+	/// How long a second click on the same road may come after the first to count as a double click.
+	/// </summary>
+	private const float DoubleClickTime = 0.4f;
+
+	/// <summary>
+	/// How far, in pixels, the cursor may move between the two clicks of a double click.
+	/// </summary>
+	private const float DoubleClickDistance = 6.0f;
+
+	// The last click on a road, to tell a double click: which road, when, where, and whether a Shift+click added it.
+	private int m_LastClickSegmentId = -1;
+	private float m_LastClickTime;
+	private Vector2 m_LastClickPosition;
+	private bool m_LastClickAdded;
+
 
 
 	public override void OnDisabled()
@@ -358,6 +374,77 @@ public class RoadSelectTool : EditorTool
 
 
 
+	/// <summary>
+	/// Every road joined to this one through its nodes, junctions included, this one among them: the whole road
+	/// network the road is part of.
+	/// </summary>
+	public static List<RoadSegment> ConnectedSegments(RoadNetwork _Network, RoadSegment _Segment)
+	{
+		var found = new List<RoadSegment>();
+
+		if (!_Network.IsValid() || _Segment is null)
+			return found;
+
+		var seenSegments = new HashSet<int> { _Segment.Id };
+		var seenNodes = new HashSet<int>();
+		var open = new Queue<RoadSegment>();
+
+		open.Enqueue(_Segment);
+
+		while (open.Count > 0)
+		{
+			var segment = open.Dequeue();
+			found.Add(segment);
+
+			foreach (int nodeId in new[] { segment.StartNodeId, segment.EndNodeId })
+			{
+				if (!seenNodes.Add(nodeId))
+					continue;
+
+				foreach (var next in _Network.GetSegmentsAt(nodeId))
+				{
+					if (seenSegments.Add(next.Id))
+						open.Enqueue(next);
+				}
+			}
+		}
+
+		return found;
+	}
+
+
+
+	/// <summary>
+	/// Selects every road connected to this one, in place of the selection; with <paramref name="_Additive"/>, adds
+	/// them to the selected roads (true) or takes them out (false) instead. Selected nodes are dropped.
+	/// </summary>
+	public void SelectConnected(RoadSegment _Segment, bool? _Additive = null)
+	{
+		var network = Network;
+
+		if (!network.IsValid() || _Segment is null)
+			return;
+
+		var connected = ConnectedSegments(network, _Segment);
+
+		m_NodeIds.Clear();
+
+		if (_Additive is null)
+			m_SegmentIds.Clear();
+
+		foreach (var segment in connected)
+		{
+			m_SegmentIds.Remove(segment.Id);
+
+			if (_Additive != false)
+				m_SegmentIds.Add(segment.Id);
+		}
+
+		SelectionVersion++;
+	}
+
+
+
 	public void ClearSelection()
 	{
 		SetSelection(-1, -1);
@@ -495,6 +582,45 @@ public class RoadSelectTool : EditorTool
 			return;
 		}
 
+		// A double click on a road selects every road connected to it. With Shift it adds them to the selection, or
+		// takes them out when the first click took the road out, so several separate roads can be gathered.
+		if (_HoverNode is null && _HoverSegment is { } clickPick && !Gizmo.IsCtrlPressed)
+		{
+			bool doubleClick = clickPick.Segment.Id == m_LastClickSegmentId
+				&& RealTime.Now - m_LastClickTime <= DoubleClickTime
+				&& Vector2.Distance(Gizmo.CursorPosition, m_LastClickPosition) <= DoubleClickDistance;
+
+			if (doubleClick)
+			{
+				m_LastClickSegmentId = -1;
+
+				if (Gizmo.IsShiftPressed)
+				{
+					SelectConnected(clickPick.Segment, m_LastClickAdded);
+					m_PaintNodes = false;
+					m_PaintAdd = m_LastClickAdded;
+					m_Painting = true;
+				}
+				else
+				{
+					SelectConnected(clickPick.Segment);
+				}
+
+				return;
+			}
+
+			m_LastClickSegmentId = clickPick.Segment.Id;
+			m_LastClickTime = RealTime.Now;
+			m_LastClickPosition = Gizmo.CursorPosition;
+
+			// A plain click selects the road; a Shift+click below says for itself.
+			m_LastClickAdded = true;
+		}
+		else
+		{
+			m_LastClickSegmentId = -1;
+		}
+
 		// Shift+click on a road adds it to the selection or takes it out; a click elsewhere leaves the selection alone.
 		if (Gizmo.IsShiftPressed)
 		{
@@ -508,6 +634,7 @@ public class RoadSelectTool : EditorTool
 			{
 				m_PaintNodes = false;
 				m_PaintAdd = ToggleSelect(shiftPick.Segment);
+				m_LastClickAdded = m_PaintAdd;
 				m_Painting = true;
 			}
 
@@ -1240,7 +1367,7 @@ file class RoadSelectToolWidget : ToolSidebarWidget
 		else if (network.IsValid() && m_Tool.SelectedSegments.ToList() is { Count: > 0 } segments)
 			BuildSegmentSection(network, segments);
 		else
-			AddGroup("Selection").Add(new WrappedLabel("Click a node or a road to select it. Shift+click adds more."));
+			AddGroup("Selection").Add(new WrappedLabel("Click a node or a road to select it. Shift+click adds more. Double-click a road to select every road connected to it."));
 
 		var snapping = AddGroup("Snapping", collapsible: true);
 		var snapTool = m_Tool.GetSerialized();
@@ -1253,6 +1380,7 @@ file class RoadSelectToolWidget : ToolSidebarWidget
 
 		AddShortcuts(
 			("Select", "LMB or SHIFT + LMB"),
+			("Select Connected Roads", "Double LMB or SHIFT + Double LMB"),
 			("Drag Node / Tangent", "LMB Drag"),
 			("Flip Snapping (Angle, Grid, Nodes)", "Hold SHIFT"),
 			("Straight Tangent (no mirror)", "ALT + Drag"),
