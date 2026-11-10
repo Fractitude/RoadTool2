@@ -131,16 +131,38 @@ public class RoadSelectTool : EditorTool
 	/// the roads already at the neighbour (the node) in Local space, the way the Draw tool does. Holding Shift flips
 	/// it for the drag.
 	/// </summary>
-	[Property, Title("Angle Snap")] public bool AngleSnap { get; set; } = false;
+	[Property, Title("Angle Snap")] public bool AngleSnap { get => RoadSnapSettings.AngleSnap; set => RoadSnapSettings.AngleSnap = value; }
 
-	[Property, Title("Snap Angle"), Range(1.0f, 90.0f)] public float AngleStep { get; set; } = 10.0f;
+	[Property, Title("Snap Angle"), Range(1.0f, 90.0f)] public float AngleStep { get => RoadSnapSettings.AngleStep; set => RoadSnapSettings.AngleStep = value; }
+
+	/// <summary>
+	/// Snap the place of a dragged node (or tangent handle) to a grid of <see cref="GridSize"/> units, counted from
+	/// the world origin. With Angle Snap on as well the node stays on the snapped direction and takes the nearest
+	/// grid line along it.
+	/// </summary>
+	[Property, Title("Grid Snap")] public bool GridSnap { get => RoadSnapSettings.GridSnap; set => RoadSnapSettings.GridSnap = value; }
+
+	[Property, Title("Grid Size"), Range(1.0f, 1000.0f)] public float GridSize { get => RoadSnapSettings.GridSize; set => RoadSnapSettings.GridSize = value; }
+
+	/// <summary>
+	/// Line a dragged node up with the nodes around it: level with another node, on the line of a road leaving it,
+	/// or where the roads of two neighbours meet. Wins over the grid when the two disagree.
+	/// </summary>
+	[Property, Title("Align To Nodes")] public bool NodeSnap { get => RoadSnapSettings.NodeSnap; set => RoadSnapSettings.NodeSnap = value; }
 
 	/// <summary>
 	/// How far a snapped direction is drawn out as a guide.
 	/// </summary>
 	private const float GuideLength = 4000.0f;
 
-	private bool SnapActive => AngleSnap != Gizmo.IsShiftPressed;
+	// Shift flips each of the three for the drag.
+	private bool AngleActive => AngleSnap != Gizmo.IsShiftPressed;
+
+	private bool GridActive => GridSnap != Gizmo.IsShiftPressed;
+
+	private bool NodeActive => NodeSnap != Gizmo.IsShiftPressed;
+
+	private bool SnapActive => AngleActive || GridActive || NodeActive;
 
 	/// <summary>
 	/// The directions the current drag snapped to, for the guides; empty when not snapping.
@@ -635,10 +657,19 @@ public class RoadSelectTool : EditorTool
 
 
 	/// <summary>
-	/// Puts a dragged node where the road from each of its neighbours runs at a snap angle. The neighbour whose snap
-	/// line is nearest the cursor decides; when another neighbour's line crosses it close by, the node goes to the
-	/// crossing so both roads are at their angles (a grid corner). The cursor's distance along the line is kept and
-	/// the point is dropped back onto the ground there.
+	/// Puts a dragged node under the snaps that are on.
+	/// <para>
+	/// Grid Snap rounds the cursor to the grid. Angle Snap puts the node where the road from each of its neighbours
+	/// runs at a snap angle: the neighbour whose snap line is nearest the cursor decides, and when another neighbour's
+	/// line crosses it close by, the node goes to the crossing so both roads are at their angles (a grid corner). The
+	/// cursor's distance along the line is kept, or moved to the nearest grid line along it with the grid on, and the
+	/// point is dropped back onto the ground there.
+	/// </para>
+	/// <para>
+	/// Align To Nodes comes last and wins: with one line to go by, the node lines up with another node along it, and
+	/// the crossing of two neighbours' lines is taken whatever the grid says. Without Angle Snap the line is the
+	/// straight one from the nearest neighbour to the cursor.
+	/// </para>
 	/// </summary>
 	private Vector3 SnapNodeTarget(RoadNetwork _Network, RoadNode _Node, Vector3 _Target)
 	{
@@ -646,75 +677,104 @@ public class RoadSelectTool : EditorTool
 		m_AlignAnchor = null;
 		m_SnapNodeId = -1;
 
-		if (!SnapActive)
+		bool angle = AngleActive;
+		bool grid = GridActive;
+		bool align = NodeActive;
+
+		if (!angle && !grid && !align)
 			return _Target;
 
 		m_SnapNodeId = _Node.Id;
 
 		var transform = _Network.WorldTransform;
 		float step = MathF.Max(1.0f, AngleStep);
-		var lines = new List<(RoadDrawTool.SnapGuide Guide, Vector2 Start, Vector2 Direction, Vector2 Delta, float Off)>();
+		float gridSize = MathF.Max(1.0f, GridSize);
+		var cursor = new Vector2(_Target.x, _Target.y);
+		Vector2 gridded = grid ? RoadDrawTool.SnapToGrid(cursor, gridSize) : cursor;
+		var lines = new List<(RoadDrawTool.SnapGuide? Guide, Vector2 Start, Vector2 Direction, Vector2 Delta, float Off)>();
 
-		foreach (var segment in _Network.GetSegmentsAt(_Node.Id))
+		// With no angle or alignment to find, the grid is all there is.
+		if (angle || align)
 		{
-			int otherId = segment.StartNodeId == _Node.Id ? segment.EndNodeId : segment.StartNodeId;
+			foreach (var segment in _Network.GetSegmentsAt(_Node.Id))
+			{
+				int otherId = segment.StartNodeId == _Node.Id ? segment.EndNodeId : segment.StartNodeId;
 
-			if (otherId == _Node.Id || _Network.FindNode(otherId) is not { } other)
-				continue;
+				if (otherId == _Node.Id || _Network.FindNode(otherId) is not { } other)
+					continue;
 
-			Vector3 startWorld = transform.PointToWorld(other.Position);
-			var start = new Vector2(startWorld.x, startWorld.y);
-			var delta = new Vector2(_Target.x, _Target.y) - start;
+				Vector3 startWorld = transform.PointToWorld(other.Position);
+				var start = new Vector2(startWorld.x, startWorld.y);
+				var delta = (angle ? cursor : gridded) - start;
 
-			if (delta.Length < 1.0f)
-				continue;
+				if (delta.Length < 1.0f)
+					continue;
 
-			var guide = SnapDirection(startWorld, delta, RoadHeadings(_Network, other, segment.Id), step);
-			Vector3 along = RoadDrawTool.HeadingDirection(guide.Heading);
-			var direction = new Vector2(along.x, along.y);
+				if (angle)
+				{
+					var guide = SnapDirection(startWorld, delta, RoadHeadings(_Network, other, segment.Id), step);
+					Vector3 along = RoadDrawTool.HeadingDirection(guide.Heading);
+					var direction = new Vector2(along.x, along.y);
 
-			lines.Add((guide, start, direction, delta, MathF.Abs(RoadDrawTool.Cross(direction, delta))));
+					lines.Add((guide, start, direction, delta, MathF.Abs(RoadDrawTool.Cross(direction, delta))));
+				}
+				else
+				{
+					// The nearest neighbour's straight line to the cursor.
+					lines.Add((null, start, delta.Normal, delta, delta.Length));
+				}
+			}
 		}
 
-		if (lines.Count == 0)
-			return _Target;
+		Vector2 snapped = gridded;
 
-		lines.Sort((a, b) => a.Off.CompareTo(b.Off));
-
-		var first = lines[0];
-		Vector2 snapped = first.Start + first.Direction * MathF.Max(1.0f, Vector2.Dot(first.Delta, first.Direction));
-		float tolerance = RoadDrawTool.AlignTolerance(_Target) * 4.0f;
-
-		m_Guides.Add(first.Guide);
-
-		foreach (var second in lines.Skip(1))
+		if (lines.Count > 0)
 		{
-			float cross = RoadDrawTool.Cross(first.Direction, second.Direction);
+			lines.Sort((a, b) => a.Off.CompareTo(b.Off));
 
-			// Parallel lines never meet.
-			if (MathF.Abs(cross) < 0.05f)
-				continue;
-
-			Vector2 between = second.Start - first.Start;
-			float t = RoadDrawTool.Cross(between, second.Direction) / cross;
-			float s = RoadDrawTool.Cross(between, first.Direction) / cross;
-			Vector2 crossing = first.Start + first.Direction * t;
-
-			if (t <= 1.0f || s <= 1.0f || Vector2.Distance(crossing, new Vector2(_Target.x, _Target.y)) > tolerance)
-				continue;
-
-			snapped = crossing;
-			m_Guides.Add(second.Guide);
-			break;
-		}
-
-		// Only one line to go by: the distance along it is still free, so line the node up with other nodes (level
-		// with them, or on the line of a road leaving them), as the Draw tool does.
-		if (m_Guides.Count == 1)
-		{
+			var first = lines[0];
 			float length = MathF.Max(1.0f, Vector2.Dot(first.Delta, first.Direction));
 
-			if (RoadDrawTool.TryAlign(_Network, _Node, first.Start, first.Direction, length, RoadDrawTool.AlignTolerance(_Target), out float aligned, out Vector3 anchor))
+			if (angle && grid)
+				length = RoadDrawTool.GridAlong(first.Start, first.Direction, length, gridSize);
+
+			snapped = first.Start + first.Direction * length;
+
+			if (first.Guide is { } firstGuide)
+				m_Guides.Add(firstGuide);
+
+			bool crossed = false;
+
+			if (angle && align)
+			{
+				float tolerance = RoadDrawTool.AlignTolerance(_Target) * 4.0f;
+
+				foreach (var second in lines.Skip(1))
+				{
+					float cross = RoadDrawTool.Cross(first.Direction, second.Direction);
+
+					// Parallel lines never meet.
+					if (MathF.Abs(cross) < 0.05f)
+						continue;
+
+					Vector2 between = second.Start - first.Start;
+					float t = RoadDrawTool.Cross(between, second.Direction) / cross;
+					float s2 = RoadDrawTool.Cross(between, first.Direction) / cross;
+					Vector2 crossing = first.Start + first.Direction * t;
+
+					if (t <= 1.0f || s2 <= 1.0f || Vector2.Distance(crossing, cursor) > tolerance)
+						continue;
+
+					snapped = crossing;
+					m_Guides.Add(second.Guide.Value);
+					crossed = true;
+					break;
+				}
+			}
+
+			// One line to go by: the distance along it is still free, so line the node up with other nodes (level with
+			// them, or on the line of a road leaving them), as the Draw tool does.
+			if (align && !crossed && RoadDrawTool.TryAlign(_Network, _Node, first.Start, first.Direction, length, RoadDrawTool.AlignTolerance(_Target), out float aligned, out Vector3 anchor))
 			{
 				snapped = first.Start + first.Direction * aligned;
 				m_AlignAnchor = anchor;
@@ -731,7 +791,8 @@ public class RoadSelectTool : EditorTool
 
 
 	/// <summary>
-	/// Points a dragged tangent handle at a snap angle from its node, keeping its length and height.
+	/// Puts a dragged tangent handle on the grid and/or points it at a snap angle from its node, keeping its height.
+	/// Angle Snap keeps its length (or, with the grid on, moves it to the nearest grid line along the direction).
 	/// </summary>
 	private Vector3 SnapHandleTarget(RoadNetwork _Network, RoadNode _Node, int _SegmentId, Vector3 _Target)
 	{
@@ -739,18 +800,38 @@ public class RoadSelectTool : EditorTool
 		m_AlignAnchor = null;
 		m_SnapNodeId = -1;
 
-		if (!SnapActive)
+		bool angle = AngleActive;
+		bool grid = GridActive;
+
+		if (!angle && !grid)
 			return _Target;
 
+		float gridSize = MathF.Max(1.0f, GridSize);
+		var cursor = new Vector2(_Target.x, _Target.y);
+
+		if (!angle)
+		{
+			Vector2 onGrid = RoadDrawTool.SnapToGrid(cursor, gridSize);
+
+			return new Vector3(onGrid.x, onGrid.y, _Target.z);
+		}
+
 		Vector3 startWorld = _Network.WorldTransform.PointToWorld(_Node.Position);
-		var delta = new Vector2(_Target.x - startWorld.x, _Target.y - startWorld.y);
+		var origin = new Vector2(startWorld.x, startWorld.y);
+		var delta = cursor - origin;
 
 		if (delta.Length < 1.0f)
 			return _Target;
 
 		var guide = SnapDirection(startWorld, delta, RoadHeadings(_Network, _Node, _SegmentId), MathF.Max(1.0f, AngleStep));
 		Vector3 along = RoadDrawTool.HeadingDirection(guide.Heading);
-		Vector3 result = startWorld + along * MathF.Max(1.0f, Vector2.Dot(delta, new Vector2(along.x, along.y)));
+		var direction = new Vector2(along.x, along.y);
+		float length = MathF.Max(1.0f, Vector2.Dot(delta, direction));
+
+		if (grid)
+			length = RoadDrawTool.GridAlong(origin, direction, length, gridSize);
+
+		Vector3 result = startWorld + along * length;
 
 		result = result.WithZ(_Target.z);
 		m_Guides.Add(guide);
@@ -815,7 +896,7 @@ public class RoadSelectTool : EditorTool
 			Gizmo.Draw.ScreenText($"{snap.Shown:0.##}°", m_GuidePoint, new Vector2(12.0f, -12.0f), size: 12.0f);
 		}
 
-		if (m_Guides.Count > 0 && m_AlignAnchor is { } anchor)
+		if (m_AlignAnchor is { } anchor)
 		{
 			Gizmo.Draw.LineThickness = 2.0f;
 			Gizmo.Draw.Color = Color.Orange;
@@ -1161,16 +1242,19 @@ file class RoadSelectToolWidget : ToolSidebarWidget
 		else
 			AddGroup("Selection").Add(new WrappedLabel("Click a node or a road to select it. Shift+click adds more."));
 
-		var snapping = AddGroup("Snapping");
+		var snapping = AddGroup("Snapping", collapsible: true);
 		var snapTool = m_Tool.GetSerialized();
 
 		SidebarRows.Add(snapping, snapTool.GetProperty(nameof(RoadSelectTool.AngleSnap)));
 		SidebarRows.Add(snapping, snapTool.GetProperty(nameof(RoadSelectTool.AngleStep)));
+		SidebarRows.Add(snapping, snapTool.GetProperty(nameof(RoadSelectTool.GridSnap)));
+		SidebarRows.Add(snapping, snapTool.GetProperty(nameof(RoadSelectTool.GridSize)));
+		SidebarRows.Add(snapping, snapTool.GetProperty(nameof(RoadSelectTool.NodeSnap)));
 
 		AddShortcuts(
 			("Select", "LMB or SHIFT + LMB"),
 			("Drag Node / Tangent", "LMB Drag"),
-			("Snap Angle + Align With Nodes", "Hold SHIFT"),
+			("Flip Snapping (Angle, Grid, Nodes)", "Hold SHIFT"),
 			("Straight Tangent (no mirror)", "ALT + Drag"),
 			("Insert Node On Road", "CTRL + LMB"),
 			("Delete Selection", "DEL"),
