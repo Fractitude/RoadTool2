@@ -60,8 +60,21 @@ public sealed partial class RoadNetwork
 	private readonly record struct RebuildJob(int SegmentId, int NodeId, RoadChunkKind Kind, long GroupSignature, ChunkPlan Plan, RoadCurveTable Table, RoadWidth Width, RoadProfile Profile, RoadJunctionLayout Junction, Dictionary<int, RoadBorderBuilder.SegmentBorderBlends> ArmBlends, Dictionary<int, SegmentBorderTapers> ArmTapers, RoadLot Lot,
 		Dictionary<int, RoadSurfaceBlend> ArmSurfaces = null);
 
+	/// <summary>
+	/// One piece the queue builds: a chunk of a segment, a piece of a junction or a piece of a lot.
+	/// </summary>
+	private readonly record struct PieceKey(RoadChunkKind Kind, int SegmentId, int NodeId, int LotId, int Index);
+
 	private bool m_IsDirty;
-	private readonly Queue<RebuildJob> m_Jobs = new();
+	private Queue<RebuildJob> m_Jobs = new();
+
+	/// <summary>
+	/// For each piece waiting in the queue, the tick it was last built on, or first asked for if it has not been
+	/// since. The queue is kept in this order, so while a drag requeues the same pieces every frame the budget goes
+	/// round all of them instead of rebuilding the first few over and over.
+	/// </summary>
+	private readonly Dictionary<PieceKey, long> m_PieceStamps = new();
+	private long m_TickCount;
 	private readonly Dictionary<int, PendingGroup> m_PendingSegments = new();
 	private readonly Dictionary<(int NodeId, RoadChunkKind Kind), PendingGroup> m_PendingJunctions = new();
 
@@ -121,13 +134,89 @@ public sealed partial class RoadNetwork
 	/// </summary>
 	private void Tick()
 	{
+		m_TickCount++;
+
 		if (m_IsDirty)
 		{
 			m_IsDirty = false;
 			Reconcile();
+			ReorderJobs();
 		}
 
 		ProcessJobs();
+	}
+
+
+
+	private static PieceKey KeyOf(in RebuildJob _Job)
+	{
+		if (_Job.Lot is not null)
+			return new PieceKey(_Job.Kind, -1, -1, _Job.Lot.Id, 0);
+
+		if (_Job.NodeId >= 0)
+			return new PieceKey(_Job.Kind, -1, _Job.NodeId, -1, 0);
+
+		return new PieceKey(_Job.Kind, _Job.SegmentId, -1, -1, _Job.Plan.Index);
+	}
+
+
+
+	/// <summary>
+	/// Whether a queued job is still the latest asked for its piece: a reconcile that finds the inputs changed again
+	/// queues the piece anew and leaves the old job behind.
+	/// </summary>
+	private bool IsCurrent(in RebuildJob _Job)
+	{
+		if (_Job.Lot is not null)
+			return m_PendingLots.TryGetValue((_Job.Lot.Id, _Job.Kind), out var lot) && lot.Signature == _Job.GroupSignature;
+
+		if (_Job.NodeId >= 0)
+			return m_PendingJunctions.TryGetValue((_Job.NodeId, _Job.Kind), out var junction) && junction.Signature == _Job.GroupSignature;
+
+		return m_PendingSegments.TryGetValue(_Job.SegmentId, out var segment) && segment.Signature == _Job.GroupSignature;
+	}
+
+
+
+	/// <summary>
+	/// Drops the jobs a reconcile has superseded and puts the rest in order of how long their piece has waited, the
+	/// ones built longest ago first. Without it, a drag that changes the same pieces every frame only ever reaches
+	/// the first few in the queue (the first roads in the list), and the junction it moves waits until the drag
+	/// stops.
+	/// </summary>
+	private void ReorderJobs()
+	{
+		if (m_Jobs.Count == 0)
+		{
+			m_PieceStamps.Clear();
+			return;
+		}
+
+		var current = new List<(RebuildJob Job, long Stamp)>(m_Jobs.Count);
+		var waiting = new HashSet<PieceKey>();
+
+		foreach (var job in m_Jobs)
+		{
+			if (!IsCurrent(job))
+				continue;
+
+			var key = KeyOf(job);
+
+			if (!m_PieceStamps.TryGetValue(key, out long stamp))
+			{
+				stamp = m_TickCount;
+				m_PieceStamps[key] = stamp;
+			}
+
+			waiting.Add(key);
+			current.Add((job, stamp));
+		}
+
+		// Stable, so pieces that have waited as long keep the order the reconcile gave them.
+		m_Jobs = new Queue<RebuildJob>(current.OrderBy(entry => entry.Stamp).Select(entry => entry.Job));
+
+		foreach (var key in m_PieceStamps.Keys.Where(key => !waiting.Contains(key)).ToList())
+			m_PieceStamps.Remove(key);
 	}
 
 
@@ -1898,54 +1987,57 @@ public sealed partial class RoadNetwork
 
 	private void ProcessJobs()
 	{
-		int budget = Math.Max(1, RebuildBudget);
+		// At least the set number of pieces, then more for as long as the frame's time allows: a drag changes a
+		// handful of pieces every frame, and they should all follow it, not a few of them per frame.
+		int count = Math.Max(1, RebuildBudget);
+		double time = Math.Max(0.0f, RebuildTimeBudget);
+		var clock = System.Diagnostics.Stopwatch.StartNew();
 
-		while (budget > 0 && m_Jobs.Count > 0)
+		while (m_Jobs.Count > 0 && (count > 0 || clock.Elapsed.TotalMilliseconds < time))
 		{
 			var job = m_Jobs.Dequeue();
 
+			// Superseded by a newer version of the same piece, or its road, junction or lot is gone.
+			if (!IsCurrent(job))
+				continue;
+
+			bool built;
+
 			if (job.Lot is not null)
 			{
-				var lotKey = (job.Lot.Id, job.Kind);
-
-				// Superseded by a newer version of the same lot, or the lot is gone.
-				if (!m_PendingLots.TryGetValue(lotKey, out var pendingLot) || pendingLot.Signature != job.GroupSignature)
-					continue;
-
 				BuildLotPiece(job);
-				budget--;
+				built = true;
 
-				m_PendingLots.Remove(lotKey);
-				continue;
+				m_PendingLots.Remove((job.Lot.Id, job.Kind));
 			}
-
-			if (job.NodeId >= 0)
+			else if (job.NodeId >= 0)
 			{
-				var key = (job.NodeId, job.Kind);
-
-				// Superseded by a newer layout of the same junction, or the junction is gone.
-				if (!m_PendingJunctions.TryGetValue(key, out var pending) || pending.Signature != job.GroupSignature)
-					continue;
-
 				BuildJunctionPiece(job);
-				budget--;
+				built = true;
 
-				m_PendingJunctions.Remove(key);
-				continue;
+				m_PendingJunctions.Remove((job.NodeId, job.Kind));
+			}
+			else
+			{
+				var pendingSegment = m_PendingSegments[job.SegmentId];
+
+				built = BuildChunk(job);
+
+				if (pendingSegment.Remaining <= 1)
+					m_PendingSegments.Remove(job.SegmentId);
+				else
+					m_PendingSegments[job.SegmentId] = pendingSegment with { Remaining = pendingSegment.Remaining - 1 };
 			}
 
-			// Superseded by a newer rebuild of the same segment, or the segment is gone.
-			if (!m_PendingSegments.TryGetValue(job.SegmentId, out var pendingSegment) || pendingSegment.Signature != job.GroupSignature)
+			if (!built)
 				continue;
 
-			if (BuildChunk(job))
-				budget--;
-
-			if (pendingSegment.Remaining <= 1)
-				m_PendingSegments.Remove(job.SegmentId);
-			else
-				m_PendingSegments[job.SegmentId] = pendingSegment with { Remaining = pendingSegment.Remaining - 1 };
+			count--;
+			m_PieceStamps[KeyOf(job)] = m_TickCount;
 		}
+
+		if (m_Jobs.Count == 0)
+			m_PieceStamps.Clear();
 	}
 
 

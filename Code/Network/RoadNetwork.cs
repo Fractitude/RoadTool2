@@ -71,9 +71,16 @@ public sealed partial class RoadNetwork : Component, Component.ExecuteInEditor
 	[Property(Title = "Chunk Length"), Group("Generation"), Range(200.0f, 10000.0f)] public float ChunkLength { get; set { field = value.Clamp(100.0f, 100000.0f); MarkDirty(); } } = 3000.0f;
 
 	/// <summary>
-	/// How many chunks may be (re)built per editor frame. Keeps the editor responsive while a long road catches up.
+	/// How many chunks are (re)built per editor frame at least, however long they take.
 	/// </summary>
 	[Property(Title = "Chunks Per Frame"), Group("Generation"), Range(1, 32)] public int RebuildBudget { get; set; } = 4;
+
+	/// <summary>
+	/// How long, in milliseconds, each editor frame may keep (re)building chunks after the first
+	/// <see cref="RebuildBudget"/>. Enough for the pieces round a dragged node to follow it every frame, while a
+	/// long road catching up still leaves the editor responsive. 0 builds only <see cref="RebuildBudget"/>.
+	/// </summary>
+	[Property(Title = "Frame Time Budget (ms)"), Group("Generation"), Range(0.0f, 50.0f)] public float RebuildTimeBudget { get; set; } = 10.0f;
 
 	/// <summary>
 	/// How far beyond a road's border the terrain takes to blend back into the landscape when it is shaped to the
