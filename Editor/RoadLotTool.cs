@@ -239,7 +239,7 @@ public class RoadLotTool : EditorTool
 	{
 		var node = _Network.FindNode(m_FromNodeId);
 
-		if (node is null || Gizmo.WasRightMousePressed)
+		if (node is null)
 		{
 			m_FromNodeId = -1;
 			return;
@@ -300,6 +300,16 @@ public class RoadLotTool : EditorTool
 
 		network.SnapOpenings(SelectedLot);
 		network.MarkDirty();
+	}
+
+
+
+	/// <summary>
+	/// Drops the lot being dragged out, if any.
+	/// </summary>
+	public void CancelDrag()
+	{
+		m_FromNodeId = -1;
 	}
 
 
@@ -549,7 +559,7 @@ file class RoadLotToolWidget : ToolSidebarWidget
 		AddShortcuts(
 			("Start A Lot", "LMB on road end"),
 			("Place It", "LMB"),
-			("Cancel", "RMB"),
+			("Cancel", "ESC"),
 			("Join A Road To A Lot", "LMB on end near lot"),
 			("Select A Lot", "LMB on lot")
 		);
@@ -575,5 +585,13 @@ file class RoadLotToolWidget : ToolSidebarWidget
 	{
 		m_UndoScope?.Dispose();
 		m_UndoScope = null;
+	}
+
+
+
+	[Shortcut("roadtool2.lot-cancel", "ESC", typeof(SceneViewWidget))]
+	private void CancelDrag()
+	{
+		m_Tool.CancelDrag();
 	}
 }
